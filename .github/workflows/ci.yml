@@ -1,0 +1,103 @@
+name: CI - Model Training Pipeline
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:  # Manual trigger
+
+env:
+  DOCKERHUB_REPO: heart-disease-mlflow
+
+jobs:
+  train-model:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.9'
+    
+    - name: Set up Miniconda
+      uses: conda-incubator/setup-miniconda@v3
+      with:
+        activate-environment: heart_disease_env
+        environment-file: MLProject/conda.yaml
+        python-version: '3.9'
+        auto-activate-base: false
+    
+    - name: Install MLflow
+      shell: bash -l {0}
+      run: |
+        pip install mlflow
+    
+    - name: Run MLflow Project
+      shell: bash -l {0}
+      working-directory: MLProject
+      run: |
+        mlflow run . --env-manager=local
+    
+    - name: List artifacts
+      shell: bash -l {0}
+      run: |
+        echo "=== Listing MLflow artifacts ==="
+        ls -la MLProject/mlruns/ || echo "No mlruns directory"
+        find MLProject -name "*.pkl" -o -name "*.joblib" 2>/dev/null || echo "No model files found"
+    
+    - name: Upload model artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: trained-model-${{ github.run_number }}
+        path: |
+          MLProject/mlruns/
+          MLProject/model/
+        retention-days: 30
+    
+    - name: Training Summary
+      shell: bash -l {0}
+      run: |
+        echo "=== Training Complete ==="
+        echo "Run Number: ${{ github.run_number }}"
+        echo "Commit SHA: ${{ github.sha }}"
+        echo "Triggered by: ${{ github.event_name }}"
+        echo "Artifacts uploaded successfully!"
+
+  build-and-push-docker:
+    runs-on: ubuntu-latest
+    needs: train-model
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Login to DockerHub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    
+    - name: Build and Push Docker Image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./MLProject
+        file: ./MLProject/Dockerfile
+        push: true
+        tags: |
+          ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.DOCKERHUB_REPO }}:latest
+          ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.DOCKERHUB_REPO }}:${{ github.sha }}
+    
+    - name: Docker Image Summary
+      run: |
+        echo "=== Docker Image Pushed ==="
+        echo "Image: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.DOCKERHUB_REPO }}:latest"
+        echo "Tag: ${{ github.sha }}"
+        echo "DockerHub: https://hub.docker.com/r/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.DOCKERHUB_REPO }}"
