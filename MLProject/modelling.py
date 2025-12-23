@@ -178,42 +178,42 @@ def log_to_mlflow(results, best_model_name, X_train, y_train):
     print("Logging to MLflow")
     print("=" * 60)
     
-    # Check if running inside MLflow Project (has active run)
-    active_run = mlflow.active_run()
+    # Check if running inside MLflow Project via environment variable
+    mlflow_run_id = os.environ.get('MLFLOW_RUN_ID')
     
-    if active_run:
-        # Running via 'mlflow run .' - use nested runs
-        print(f"  Using existing MLflow run: {active_run.info.run_id}")
+    if mlflow_run_id:
+        # Running via 'mlflow run .' - log directly to the existing run
+        print(f"  Using MLflow Project run: {mlflow_run_id}")
         
-        # Log best model info to parent run
+        # Log best model metrics and info directly (no nested runs)
         best_result = results[best_model_name]
-        for metric_name, metric_value in best_result['metrics'].items():
-            mlflow.log_metric(f"best_{metric_name}", metric_value)
-        mlflow.set_tag("best_model_type", best_model_name)
+        best_model = best_result['model']
         
-        # Log all models as nested runs
+        # Log best model metrics
+        for metric_name, metric_value in best_result['metrics'].items():
+            mlflow.log_metric(metric_name, metric_value)
+        
+        # Log best model parameters
+        params = best_model.get_params()
+        for param_name, param_value in params.items():
+            if param_value is not None and not callable(param_value):
+                try:
+                    mlflow.log_param(param_name, param_value)
+                except:
+                    pass
+        
+        # Log the best model
+        mlflow.sklearn.log_model(best_model, "model")
+        mlflow.set_tag("best_model_type", best_model_name)
+        mlflow.set_tag("model_type", best_model_name)
+        
+        # Log comparison metrics for all models as a summary
         for name, result in results.items():
-            with mlflow.start_run(run_name=name, nested=True):
-                model = result['model']
-                params = model.get_params()
-                for param_name, param_value in params.items():
-                    if param_value is not None and not callable(param_value):
-                        try:
-                            mlflow.log_param(param_name, param_value)
-                        except:
-                            pass
-                
-                for metric_name, metric_value in result['metrics'].items():
-                    mlflow.log_metric(metric_name, metric_value)
-                
-                if name == best_model_name:
-                    mlflow.sklearn.log_model(model, "model")
-                    mlflow.set_tag("best_model", "true")
-                else:
-                    mlflow.sklearn.log_model(model, "model")
-                
-                mlflow.set_tag("model_type", name)
-                print(f"  Logged: {name}")
+            for metric_name, metric_value in result['metrics'].items():
+                mlflow.log_metric(f"{name.replace(' ', '_')}_{metric_name}", metric_value)
+        
+        print(f"  Logged best model: {best_model_name}")
+        print(f"  Logged comparison metrics for all {len(results)} models")
     else:
         # Running directly via 'python modelling.py'
         mlflow.set_experiment("Heart_Disease_Classification")
